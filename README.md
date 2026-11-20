@@ -1,56 +1,57 @@
-# Welcome to your Expo app 👋
+# Yatri
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+A motorbike riding app for Android and iOS, built with Expo (SDK 58) and React Native.
 
-## Get started
+## Features
 
-1. Install dependencies
+- **Ride recording**: live speed, distance, average and top speed, lean angle and G-force, with overspeed alerts (sound, vibration and voice). Keeps recording with the phone locked on Android.
+- **Navigation**: place search, turn-by-turn directions with voice, and nearby fuel, hospitals, food, parking and toilets.
+- **Group rides**: share a 6-digit code, see everyone live on the map with speed and distance, a leader and a shared destination, nicknames, rider avatars, and one-tap quick messages ("Traffic jam ahead", "Regroup here"…).
+- **Garage**: vehicles, odometer, fuel log and service reminders.
+- **History**: every ride with its route, speed chart and stats.
+- **Parking**: remembers where you left the bike.
+- **Your look**: light and dark themes and a custom accent colour.
 
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **src/app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Run it
 
 ```bash
-npm run reset-project
+npm install
+npx expo start
 ```
 
-This command will move the starter code to the **example** directory and create a blank **src/app** directory where you can start developing.
+Then open the project in Expo Go, or in a development build for features Expo Go doesn't support (location with the phone locked).
 
-### Other setup steps
+### Secrets
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+Keys are read from a git-ignored `.env.local` in the project root:
 
-## Learn more
+```
+GOOGLE_MAPS_API_KEY=...
+EXPO_PUBLIC_FIREBASE_API_KEY=...
+EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN=...
+EXPO_PUBLIC_FIREBASE_DATABASE_URL=...
+EXPO_PUBLIC_FIREBASE_PROJECT_ID=...
+EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET=...
+EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=...
+EXPO_PUBLIC_FIREBASE_APP_ID=...
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+Group rides need a Firebase project with Anonymous sign-in and a Realtime Database, using the rules in [`firebase/database.rules.json`](firebase/database.rules.json).
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+## Build an Android APK
 
-## Join the community
+The `android/` folder is generated, so don't edit it by hand. Release builds are signed with a keystore whose path and passwords come from `YATRI_UPLOAD_*` in `~/.gradle/gradle.properties` (see [`plugins/with-release-signing.js`](plugins/with-release-signing.js)).
 
-Join our community of developers creating universal apps.
+```bash
+npx expo prebuild --platform android
+cd android && ./gradlew assembleRelease
+```
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Project layout
+
+- `src/app`: screens (Expo Router, file-based routes)
+- `src/components`: UI pieces
+- `src/lib`: ride tracking, navigation, group rides, avatars
+- `src/db`: on-device SQLite storage
+- `scripts`: generators for the logo, wordmark, avatars and alert sound
+- `plugins`: Expo config plugins (signing, CMake version)
