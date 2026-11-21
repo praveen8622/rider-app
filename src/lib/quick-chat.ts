@@ -1,23 +1,36 @@
 import type { IconName } from '@/components/icon';
 
+export type QuickTone = 'warn' | 'danger' | 'info' | 'ok';
+/** Where a message sits in the picker: what needs attention now, what's on the road, what's next. */
+export type QuickGroup = 'urgent' | 'road' | 'plan';
+
 /**
  * One-tap messages for riding: no typing on the bike. Only the id travels over the network;
  * the text and icon come from this list on each phone.
  */
 export const QUICK_MESSAGES = [
-  { id: 'traffic', text: 'Traffic jam ahead', icon: 'car-multiple', tone: 'warn' },
-  { id: 'blocked', text: 'Road blocked, no way', icon: 'road-variant', tone: 'danger' },
-  { id: 'offroad', text: 'Off-road ahead', icon: 'terrain', tone: 'warn' },
-  { id: 'potholes', text: 'Potholes ahead', icon: 'alert-octagon-outline', tone: 'warn' },
-  { id: 'police', text: 'Police check ahead', icon: 'police-badge-outline', tone: 'warn' },
-  { id: 'slow', text: 'Slow down', icon: 'speedometer-slow', tone: 'warn' },
-  { id: 'wait', text: 'Stop, wait for me', icon: 'hand-back-right-outline', tone: 'danger' },
-  { id: 'regroup', text: 'Regroup here', icon: 'map-marker-radius-outline', tone: 'info' },
-  { id: 'fuel', text: 'Need fuel', icon: 'gas-station-outline', tone: 'info' },
-  { id: 'tea', text: 'Tea break', icon: 'coffee-outline', tone: 'info' },
-  { id: 'problem', text: 'Bike problem', icon: 'wrench-outline', tone: 'danger' },
-  { id: 'ok', text: 'All good', icon: 'thumb-up-outline', tone: 'ok' },
-] as const satisfies readonly { id: string; text: string; icon: IconName; tone: 'warn' | 'danger' | 'info' | 'ok' }[];
+  { id: 'wait', text: 'Stop, wait for me', short: 'Wait for me', icon: 'hand-back-right', tone: 'danger', group: 'urgent' },
+  { id: 'problem', text: 'Bike problem', short: 'Bike problem', icon: 'wrench', tone: 'danger', group: 'urgent' },
+  { id: 'traffic', text: 'Traffic jam ahead', short: 'Traffic jam', icon: 'car-multiple', tone: 'warn', group: 'road' },
+  { id: 'blocked', text: 'Road blocked, no way', short: 'Road blocked', icon: 'road-variant', tone: 'warn', group: 'road' },
+  { id: 'offroad', text: 'Off-road ahead', short: 'Off-road', icon: 'terrain', tone: 'warn', group: 'road' },
+  { id: 'potholes', text: 'Potholes ahead', short: 'Potholes', icon: 'alert-octagon', tone: 'warn', group: 'road' },
+  { id: 'police', text: 'Police check ahead', short: 'Police check', icon: 'police-badge', tone: 'warn', group: 'road' },
+  { id: 'slow', text: 'Slow down', short: 'Slow down', icon: 'speedometer-slow', tone: 'warn', group: 'road' },
+  { id: 'regroup', text: 'Regroup here', short: 'Regroup here', icon: 'map-marker-radius', tone: 'info', group: 'plan' },
+  { id: 'fuel', text: 'Need fuel', short: 'Need fuel', icon: 'gas-station', tone: 'info', group: 'plan' },
+  { id: 'tea', text: 'Tea break', short: 'Tea break', icon: 'coffee', tone: 'info', group: 'plan' },
+  { id: 'ok', text: 'All good', short: 'All good', icon: 'thumb-up', tone: 'ok', group: 'plan' },
+] as const satisfies readonly {
+  id: string;
+  /** Full sentence, for the banner and voice. */
+  text: string;
+  /** Fits a small tile. */
+  short: string;
+  icon: IconName;
+  tone: QuickTone;
+  group: QuickGroup;
+}[];
 
 export type QuickMessage = (typeof QUICK_MESSAGES)[number];
 export type QuickMessageId = QuickMessage['id'];

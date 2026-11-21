@@ -5,7 +5,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useSQLiteContext, type SQLiteDatabase } from 'expo-sqlite';
 import * as TaskManager from 'expo-task-manager';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, AppState, BackHandler, Pressable, StyleSheet, useWindowDimensions, Vibration, View } from 'react-native';
+import { Alert, AppState, BackHandler, Platform, Pressable, StyleSheet, useWindowDimensions, Vibration, View } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
 
 import { Button } from '@/components/button';
@@ -21,6 +21,7 @@ import { RiderStrip } from '@/components/rider-strip';
 import { Stat } from '@/components/stat';
 import { SafeView } from '@/components/safe-view';
 import { ThemedText } from '@/components/themed-text';
+import { ToastHost } from '@/components/toast-host';
 import { Fonts, Radius, Spacing } from '@/constants/theme';
 import { MIN_RIDE_DISTANCE_M } from '@/db/rides';
 import { loadSettings, saveSetting, type Settings } from '@/db/settings';
@@ -92,12 +93,25 @@ export default function RideScreen() {
   const scheme = useColorScheme();
   const { width, height } = useWindowDimensions();
   const params = useLocalSearchParams<{ destLat?: string; destLng?: string; destName?: string }>();
-  const destination: (LatLng & { name: string }) | null =
+  // A place you picked yourself in Navigate. It stays yours: the group's destination doesn't replace it.
+  const ownDestination: (LatLng & { name: string }) | null =
     params.destLat && params.destLng
       ? { latitude: Number(params.destLat), longitude: Number(params.destLng), name: params.destName ?? 'Destination' }
       : null;
+  // Otherwise, in a group ride, head for the group's destination, and follow it if the leader changes it.
+  const group = useGroupRide();
+  const groupDestination = group.code && !group.ended ? group.destination : null;
+  const destination = ownDestination ?? groupDestination;
+  const destKey = destination ? `${destination.latitude},${destination.longitude},${destination.name}` : '';
 
   const sessionRef = useRef<RideSession | null>(null);
+  // The destination as of the latest render, for code that runs outside React (GPS ticks).
+  const destRef = useRef(destination);
+  useEffect(() => {
+    destRef.current = destination;
+  });
+  const planRouteRef = useRef<((from: LatLng, voice: boolean) => Promise<void>) | null>(null);
+  const sessionStartedRef = useRef(false);
   const mapRef = useRef<MapView>(null);
   const navRef = useRef<Navigator | null>(null);
   const [snap, setSnap] = useState<RideSnapshot | null>(null);
@@ -108,11 +122,18 @@ export default function RideScreen() {
   const [view, setView] = useState<'map' | 'gauge'>(() => (destination || currentGroupCode() ? 'map' : 'gauge'));
   const [following, setFollowing] = useState(true);
   const [meta, setMeta] = useState({ limit: 60, alertOn: true, gaugeMax: 120 });
+  // Live traffic layer on the map; the choice is remembered.
+  const [traffic, setTraffic] = useState(true);
+  const toggleTraffic = () => {
+    const next = !traffic;
+    setTraffic(next);
+    saveSetting(db, 'showTraffic', next);
+    showToast(next ? 'Live traffic on' : 'Live traffic off', { icon: 'traffic-light', durationMs: 1500 });
+  };
   // How you look on the map: same avatar friends see. Re-read after "Change my look".
   const look = useRiderIdentity();
 
   // Group ride: friends on the map (empty when not in a group).
-  const group = useGroupRide();
   const now = useNow();
   const everyone = group.code && !group.ended ? ridersOf(group, now) : [];
   const friends = everyone.filter((r) => !r.isMe);
@@ -125,6 +146,7 @@ export default function RideScreen() {
 
   // Quick chat: one-tap messages out, a banner (and voice) for messages in.
   const [chatOpen, setChatOpen] = useState(false);
+  const chatAvailable = !!group.code && !group.ended;
   const [incoming, setIncoming] = useState<(QuickChat & { message: QuickMessage }) | null>(null);
   const voiceRef = useRef(true);
   const everyoneRef = useRef(everyone);
@@ -178,14 +200,17 @@ export default function RideScreen() {
     let lastFix = 0;
     let lastReroute = 0;
     let rerouting = false;
-    const dest = destination;
 
+    // Always routes to the current destination (it can change mid-ride in a group).
     const planRoute = async (from: LatLng, voice: boolean) => {
+      const dest = destRef.current;
       if (!dest) return;
       rerouting = true;
       try {
         const r = await fetchRoute(from, dest);
-        if (cancelled) return;
+        // Dropped if the destination changed again while this was loading.
+        const now = destRef.current;
+        if (cancelled || !now || now.latitude !== dest.latitude || now.longitude !== dest.longitude) return;
         navRef.current = new Navigator(r, voice);
         setRoute(r);
         setNavError(null);
@@ -196,6 +221,7 @@ export default function RideScreen() {
         rerouting = false;
       }
     };
+    planRouteRef.current = planRoute;
 
     const onTick = () => {
       if (!session) return;
@@ -234,6 +260,7 @@ export default function RideScreen() {
       });
       // Quick messages are read out with the same switch as the other voice alerts.
       voiceRef.current = settings.voiceAlerts;
+      setTraffic(settings.showTraffic);
       session = new RideSession(db, settings, active?.id ?? null);
       try {
         const background = await canTrackInBackground(db, settings).catch(() => false);
@@ -252,7 +279,8 @@ export default function RideScreen() {
       sessionRef.current = session;
       timer = setInterval(onTick, UI_REFRESH_MS);
 
-      if (dest) {
+      sessionStartedRef.current = true;
+      if (destRef.current) {
         const pos =
           (await Location.getLastKnownPositionAsync()) ??
           (await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }));
@@ -274,9 +302,39 @@ export default function RideScreen() {
           .catch(() => {});
       }
     };
-    // The destination comes from the route params and never changes for this screen.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // The ride is set up once per screen; later destination changes are handled below.
   }, [db]);
+
+  // The group's destination was set, changed or cleared mid-ride: re-plan from where you are.
+  const lastDestKeyRef = useRef(destKey);
+  useEffect(() => {
+    if (lastDestKeyRef.current === destKey) return;
+    lastDestKeyRef.current = destKey;
+    // Before the ride has started, the start-up code plans the first route itself.
+    if (!sessionStartedRef.current) return;
+    const dest = destRef.current;
+    if (!dest) {
+      navRef.current = null;
+      setRoute(null);
+      setNav(null);
+      setNavError(null);
+      showToast('Group destination removed', { icon: 'flag-off-outline' });
+      return;
+    }
+    navRef.current = null;
+    setNav(null);
+    setRoute(null);
+    setFollowing(true);
+    setView('map');
+    showToast(`New destination: ${dest.name}`, { icon: 'flag-checkered', durationMs: 3500 });
+    if (voiceRef.current) Speech.speak(`New destination: ${dest.name}`);
+    const from = sessionRef.current?.snapshot().position;
+    if (from) planRouteRef.current?.(from, voiceRef.current);
+    else
+      Location.getLastKnownPositionAsync()
+        .then((p) => p && planRouteRef.current?.({ latitude: p.coords.latitude, longitude: p.coords.longitude }, voiceRef.current))
+        .catch(() => {});
+  }, [destKey]);
 
   const end = async (save: boolean) => {
     const session = sessionRef.current;
@@ -444,16 +502,6 @@ export default function RideScreen() {
             <ThemedText type="small">{gps.label}</ThemedText>
           </View>
           <ThemedText type="number">{formatDuration(s?.elapsedS ?? 0)}</ThemedText>
-          <View style={styles.topRight}>
-          {group.code && !group.ended ? (
-            <Pressable
-              onPress={() => setChatOpen(true)}
-              accessibilityRole="button"
-              accessibilityLabel="Send a quick message to the group"
-              style={({ pressed }) => [styles.chatButton, { backgroundColor: theme.backgroundElement }, pressed && styles.pressedDim]}>
-              <Icon name="message-flash-outline" size={20} themeColor="accent" />
-            </Pressable>
-          ) : null}
           <View style={[styles.toggle, { backgroundColor: theme.backgroundElement }]}>
             {(['map', 'gauge'] as const).map((v) => (
               <Pressable
@@ -464,7 +512,6 @@ export default function RideScreen() {
                 <Icon name={v === 'map' ? 'map' : 'speedometer'} size={18} color={view === v ? theme.onAccent : theme.textSecondary} />
               </Pressable>
             ))}
-          </View>
           </View>
         </View>
 
@@ -537,6 +584,8 @@ export default function RideScreen() {
               showsMyLocationButton={false}
               toolbarEnabled={false}
               showsPointsOfInterests={false}
+              // Live traffic colours on the roads (Google on Android, Apple on iPhone; no extra cost).
+              showsTraffic={traffic}
               userInterfaceStyle={scheme === 'dark' ? 'dark' : 'light'}
               initialCamera={
                 s?.position
@@ -614,23 +663,41 @@ export default function RideScreen() {
 
             <MapCompass heading={mapHeading} active={northUp} onPress={toggleNorthUp} style={styles.compass} />
 
+            <Pressable
+              onPress={toggleTraffic}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: traffic }}
+              accessibilityLabel="Live traffic"
+              style={({ pressed }) => [
+                styles.trafficButton,
+                { backgroundColor: theme.backgroundElement, borderColor: traffic ? theme.accent : theme.border },
+                pressed && styles.fabPressed,
+              ]}>
+              <Icon name="traffic-light" size={22} color={traffic ? theme.accent : theme.textMuted} />
+            </Pressable>
+
             {!following ? (
               <Pressable
                 onPress={() => recenter()}
-                style={[styles.recenter, { backgroundColor: theme.backgroundElement }]}
+                // Sits above the chat button when that's showing.
+                style={[styles.recenter, chatAvailable && styles.recenterRaised, { backgroundColor: theme.backgroundElement }]}
                 accessibilityLabel="Re-centre map">
                 <Icon name="crosshairs-gps" size={24} themeColor="accent" />
               </Pressable>
             ) : null}
+
+            {chatAvailable ? <ChatFab onPress={() => setChatOpen(true)} style={styles.chatFab} /> : null}
           </View>
         ) : (
           <>
             {/* Top: a live map (route when navigating, friends in a group). Tap for the full map. */}
+            <View style={styles.glanceMap}>
             <MiniMap
-              style={styles.glanceMap}
+              style={styles.flex}
               position={s?.position ?? null}
               heading={northUp ? 0 : (s?.heading ?? null)}
               travelHeading={s?.heading ?? null}
+              traffic={traffic}
               route={route?.coords ?? null}
               destination={destination ?? (group.ended ? null : group.destination)}
               friends={friends}
@@ -644,6 +711,8 @@ export default function RideScreen() {
               }
               onPress={() => setView('map')}
             />
+            {chatAvailable ? <ChatFab onPress={() => setChatOpen(true)} style={styles.chatFabMini} small /> : null}
+            </View>
 
             <View style={styles.gauge}>
               <Speedometer
@@ -709,8 +778,13 @@ export default function RideScreen() {
         </View>
       </SafeView>
 
+      {/* iPhone shows this screen as a separate full-screen layer above the app's own toast;
+          give it its own so "Sent" and "New destination" are visible. Android shares one. */}
+      {Platform.OS === 'ios' ? <ToastHost /> : null}
+
       {chatOpen ? (
         <QuickChatSheet
+          recipients={friends.length}
           onClose={() => setChatOpen(false)}
           onSend={(m) => {
             setChatOpen(false);
@@ -743,6 +817,27 @@ export default function RideScreen() {
         />
       ) : null}
     </View>
+  );
+}
+
+/** Round accent button for quick messages, sized for a gloved thumb. */
+function ChatFab({ onPress, style, small }: { onPress: () => void; style?: object; small?: boolean }) {
+  const theme = useTheme();
+  const size = small ? 48 : 56;
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel="Send a quick message to the group"
+      hitSlop={8}
+      style={({ pressed }) => [
+        styles.fab,
+        { width: size, height: size, borderRadius: size / 2, backgroundColor: theme.accent, shadowColor: theme.accent },
+        pressed && styles.fabPressed,
+        style,
+      ]}>
+      <Icon name="message-flash" size={small ? 22 : 26} color={theme.onAccent} />
+    </Pressable>
   );
 }
 
@@ -805,20 +900,31 @@ const styles = StyleSheet.create({
     borderRadius: Radius.pill,
     padding: 3,
   },
-  topRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-  },
-  chatButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+  fab: {
     alignItems: 'center',
     justifyContent: 'center',
+    elevation: 8,
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
   },
-  pressedDim: {
-    opacity: 0.7,
+  fabPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.94 }],
+  },
+  // Bottom right of the map: where the right thumb rests.
+  chatFab: {
+    position: 'absolute',
+    right: Spacing.three,
+    bottom: Spacing.three,
+  },
+  chatFabMini: {
+    position: 'absolute',
+    right: 10,
+    bottom: 10,
+  },
+  recenterRaised: {
+    bottom: Spacing.three + 56 + 12,
   },
   // Zero-height anchor right under the top bar; the banner floats over what's below.
   chatSlot: {
@@ -890,6 +996,23 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 12,
     right: 12,
+  },
+  // Under the compass, same size and shape.
+  trafficButton: {
+    position: 'absolute',
+    top: 12 + 46 + 10,
+    right: 12,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
   },
   strip: {
     position: 'absolute',

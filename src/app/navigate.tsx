@@ -339,6 +339,8 @@ export default function NavigateScreen() {
         style={StyleSheet.absoluteFill}
         initialRegion={{ ...region, latitudeDelta: 0.03, longitudeDelta: 0.03 }}
         showsUserLocation
+        // While previewing a route, show live traffic so jams on the way are visible before starting.
+        showsTraffic={!!route}
         userInterfaceStyle={scheme === 'dark' ? 'dark' : 'light'}
         toolbarEnabled={false}
         showsMyLocationButton={false}

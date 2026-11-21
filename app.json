@@ -2,14 +2,14 @@
   "expo": {
     "name": "Yatri",
     "slug": "yatri",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "yatri",
     "userInterfaceStyle": "automatic",
     "android": {
       "package": "com.riders.yatri",
-      "versionCode": 2,
+      "versionCode": 3,
       "adaptiveIcon": {
         "backgroundColor": "#E8590C",
         "foregroundImage": "./assets/images/android-icon-foreground.png",

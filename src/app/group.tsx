@@ -1,13 +1,14 @@
 import * as Haptics from 'expo-haptics';
 import * as Linking from 'expo-linking';
 import * as Location from 'expo-location';
-import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useFocusEffect, useLocalSearchParams, usePreventRemove } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Keyboard,
+  Platform,
   Pressable,
   ScrollView,
   Share,
@@ -65,7 +66,51 @@ export default function GroupScreen() {
     if (loaded && group.code) syncMyLook(loaded);
   }, [loaded, group.code]);
 
+  // Going back while in a group: ask whether to leave/end it or keep it running.
+  const db = useSQLiteContext();
+  const amLeader = !!group.code && group.leader === group.me;
+  // Lifts the block straight away (otherwise the same question would come back on leaving).
+  const allowLeaveRef = useRef<() => void>(() => {});
+  const allowLeave = usePreventRemove(!!group.code && !group.ended, ({ repeat }) => {
+    const go = () => {
+      allowLeaveRef.current();
+      repeat();
+    };
+    Alert.alert(
+      amLeader ? 'End the group ride?' : 'Leave the group ride?',
+      amLeader
+        ? `You lead group ${formatCode(group.code ?? '')}. Keep it running to come back to it, or end it for everyone.`
+        : `You're in group ${formatCode(group.code ?? '')}. Keep it to stay on friends' maps, or leave it.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: amLeader ? 'End group' : 'Leave group',
+          style: 'destructive',
+          onPress: async () => {
+            await leaveGroup(db, { endForEveryone: amLeader });
+            go();
+          },
+        },
+        // Back to the dashboard with the group still on, like before.
+        { text: 'Keep group', onPress: go },
+      ],
+    );
+  });
+  useEffect(() => {
+    allowLeaveRef.current = allowLeave;
+  });
+  // iPhone: the native back button and swipe-back leave before the question above can be
+  // asked. While in a group, use our own back button (it asks) and turn swipe-back off.
+  const guard = Platform.OS === 'ios' && !!group.code && !group.ended;
+
   return (
+    <>
+    <Stack.Screen
+      options={{
+        gestureEnabled: !guard,
+        headerLeft: guard ? () => <HeaderBack onPress={() => router.back()} /> : undefined,
+      }}
+    />
     <ScrollView
       style={{ backgroundColor: theme.background }}
       contentContainerStyle={styles.content}
@@ -84,6 +129,16 @@ export default function GroupScreen() {
         <NotInGroup identity={identity} initialCode={params.code} />
       )}
     </ScrollView>
+    </>
+  );
+}
+
+/** iOS-style back chevron for the header, used where leaving has to ask first. */
+function HeaderBack({ onPress }: { onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} hitSlop={12} accessibilityRole="button" accessibilityLabel="Back">
+      <Icon name="chevron-left" size={32} themeColor="accent" />
+    </Pressable>
   );
 }
 
@@ -364,16 +419,9 @@ function InGroup({ identity }: { identity: RiderIdentity }) {
       },
     ]);
 
-  // With a destination, every rider gets turn-by-turn directions to it.
-  const startRiding = () =>
-    router.push(
-      dest
-        ? {
-            pathname: '/ride',
-            params: { destLat: String(dest.latitude), destLng: String(dest.longitude), destName: dest.name },
-          }
-        : '/ride',
-    );
+  // The ride picks up the group's destination itself (and follows it if the leader changes it),
+  // so every rider gets turn-by-turn directions from wherever they are.
+  const startRiding = () => router.push('/ride');
 
   const fitAll = (animated = true) => {
     if (allPoints.length === 0) return;

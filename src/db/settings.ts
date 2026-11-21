@@ -58,6 +58,8 @@ export type Settings = {
   groupCode: string | null;
   /** How you look in group rides: 'photo', an avatar preset, 'initials', or null (photo if you have one). */
   rideAvatar: string | null;
+  /** Live traffic colours on the ride map. */
+  showTraffic: boolean;
 };
 
 export const RECENT_PLACES_MAX = 4;
@@ -78,6 +80,7 @@ export const DEFAULT_SETTINGS: Settings = {
   profile: EMPTY_PROFILE,
   groupCode: null,
   rideAvatar: null,
+  showTraffic: true,
 };
 
 export async function loadSettings(db: SQLiteDatabase): Promise<Settings> {

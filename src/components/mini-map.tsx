@@ -24,9 +24,12 @@ export function MiniMap({
   friends,
   me,
   label,
+  traffic = false,
   onPress,
   style,
 }: {
+  /** Live traffic colours on the roads. */
+  traffic?: boolean;
   position: LatLng | null;
   /** Which way the map turns (0 = north up). */
   heading: number | null;
@@ -73,6 +76,7 @@ export function MiniMap({
           showsMyLocationButton={false}
           showsPointsOfInterests={false}
           showsUserLocation={!position}
+          showsTraffic={traffic}
           userInterfaceStyle={scheme === 'dark' ? 'dark' : 'light'}>
           {route && route.length > 1 ? (
             <Polyline coordinates={route} strokeColor={theme.accent} strokeWidth={6} lineJoin="round" lineCap="round" />

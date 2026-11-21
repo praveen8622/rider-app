@@ -1,8 +1,8 @@
 import * as Haptics from 'expo-haptics';
-import { router } from 'expo-router';
+import { router, useNavigation, usePreventRemove } from 'expo-router';
 import { useSQLiteContext } from 'expo-sqlite';
-import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 
 import { Button } from '@/components/button';
 import { Card } from '@/components/card';
@@ -21,17 +21,79 @@ import { ART_PRESETS, avatarLabel, CHARACTER_PRESETS, resolveAvatar } from '@/li
 export default function RideAvatarScreen() {
   const db = useSQLiteContext();
   const theme = useTheme();
+  const navigation = useNavigation();
   const [identity, setIdentity] = useState<RiderIdentity | null>(null);
-  // What's highlighted: 'photo', 'initials' or a preset.
+  // What's highlighted: 'photo', 'initials' or a preset; and what's saved, to spot unsaved changes.
   const [choice, setChoice] = useState<string>('initials');
+  const [savedChoice, setSavedChoice] = useState<string>('initials');
   const [saving, setSaving] = useState(false);
+  const dirty = !!identity && choice !== savedChoice;
 
   useEffect(() => {
     Promise.all([loadRiderIdentity(db), loadSettings(db)]).then(([id, settings]) => {
+      const current = resolveAvatar(settings.rideAvatar, id.photoUri) ?? 'initials';
       setIdentity(id);
-      setChoice(resolveAvatar(settings.rideAvatar, id.photoUri) ?? 'initials');
+      setChoice(current);
+      setSavedChoice(current);
     });
   }, [db]);
+
+  /** Saves the picked look; friends in a group see it right away. */
+  const persist = async () => {
+    if (!identity) return;
+    await saveSetting(db, 'rideAvatar', choice);
+    setSavedChoice(choice);
+    // Photo upload (if any) continues in the background.
+    syncMyLook({ ...identity, avatar: resolveAvatar(choice, identity.photoUri) });
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
+
+  // Leaving with a new avatar picked but not saved (back arrow, Android back, swipe): ask first.
+  const [discarded, setDiscarded] = useState(false);
+  // Lifts the block straight away (otherwise the same question would come back on leaving).
+  const allowLeaveRef = useRef<() => void>(() => {});
+  const allowLeave = usePreventRemove(dirty && !discarded, ({ repeat }) => {
+    Alert.alert('Save your new look?', 'You picked a new avatar but haven’t saved it.', [
+      { text: 'Keep editing', style: 'cancel' },
+      {
+        text: 'Discard',
+        style: 'destructive',
+        onPress: () => {
+          setDiscarded(true);
+          allowLeaveRef.current();
+          repeat();
+        },
+      },
+      {
+        text: 'Save',
+        onPress: async () => {
+          await persist();
+          allowLeaveRef.current();
+          repeat();
+        },
+      },
+    ]);
+  });
+  useEffect(() => {
+    allowLeaveRef.current = allowLeave;
+  });
+  useEffect(() => {
+    navigation.setOptions({
+      // An iPhone swipe-down can't be paused to ask, so it's switched off while there are changes...
+      gestureEnabled: !dirty,
+      // ...and iPhone sheets have no back button, so give it a Cancel that asks first.
+      headerLeft:
+        Platform.OS === 'ios'
+          ? () => (
+              <Pressable onPress={() => router.back()} hitSlop={12} accessibilityRole="button" accessibilityLabel="Cancel">
+                <ThemedText themeColor="accent" style={styles.headerCancel}>
+                  Cancel
+                </ThemedText>
+              </Pressable>
+            )
+          : undefined,
+    });
+  }, [navigation, dirty]);
 
   if (!identity) return <View style={{ flex: 1, backgroundColor: theme.background }} />;
 
@@ -42,11 +104,9 @@ export default function RideAvatarScreen() {
 
   const save = async () => {
     setSaving(true);
-    await saveSetting(db, 'rideAvatar', choice);
-    const next = { ...identity, avatar: resolveAvatar(choice, identity.photoUri) };
-    // If in a group, friends see the new look right away (photo upload continues in the background).
-    syncMyLook(next);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    await persist();
+    // Saved: nothing to ask about, leave straight away.
+    allowLeave();
     router.back();
   };
 
@@ -211,6 +271,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.two,
     paddingVertical: Spacing.three,
+  },
+  headerCancel: {
+    fontSize: 17,
   },
   nameRow: {
     flexDirection: 'row',
